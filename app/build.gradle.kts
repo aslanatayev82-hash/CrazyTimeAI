@@ -1,3 +1,4 @@
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,8 +12,8 @@ android {
         applicationId = "az.crazytime.ai"
         minSdk = 23
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "3.0"
     }
 
     compileOptions {
@@ -23,8 +24,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 dependencies {
+    implementation("androidx.core:core-ktx:1.15.0")
+
+    // Google ML Kit - mətn tanıma (OCR)
     implementation("com.google.mlkit:text-recognition:16.0.1")
 }
