@@ -55,7 +55,9 @@ class CaptureService : Service() {
     private var workerHandler: Handler? = null
 
     private val recognizer by lazy {
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        TextRecognition.getClient(
+            TextRecognizerOptions.DEFAULT_OPTIONS
+        )
     }
 
     private val processing = AtomicBoolean(false)
@@ -268,9 +270,8 @@ class CaptureService : Service() {
         val metrics = DisplayMetrics()
 
         if (Build.VERSION.SDK_INT >= 30) {
-            val bounds = resources.displayMetrics
-            screenWidth = bounds.widthPixels
-            screenHeight = bounds.heightPixels
+            screenWidth = resources.displayMetrics.widthPixels
+            screenHeight = resources.displayMetrics.heightPixels
             screenDensity = resources.displayMetrics.densityDpi
         } else {
             val windowManager =
@@ -316,13 +317,15 @@ class CaptureService : Service() {
                 return
             }
 
-            bitmap = imageToBitmap(image)
+            // Düzəldilmiş Bitmap hissəsi
+            val capturedBitmap = imageToBitmap(image)
+            bitmap = capturedBitmap
 
             image.close()
             image = null
 
             val inputImage = InputImage.fromBitmap(
-                bitmap,
+                capturedBitmap,
                 0
             )
 
@@ -412,7 +415,6 @@ class CaptureService : Service() {
             .replace("\n", " ")
             .replace(Regex("\\s+"), " ")
 
-        // Bonus adlarını əvvəl yoxlayırıq.
         val bonusWords = listOf(
             "crazy time",
             "cash hunt",
@@ -432,7 +434,6 @@ class CaptureService : Service() {
             }
         }
 
-        // Rəqəmlər yalnız ayrıca söz kimi axtarılır.
         val numberMatches = Regex(
             "(?<![a-z0-9])(?:10|5|2|1)(?![a-z0-9])"
         ).findAll(normalized)
@@ -440,8 +441,6 @@ class CaptureService : Service() {
             .distinct()
             .toList()
 
-        // Bir neçə fərqli rəqəm görünürsə,
-        // yanlış nəticə göstərməmək üçün namizəd boş qalır.
         return if (numberMatches.size == 1) {
             numberMatches.first()
         } else {
