@@ -1,4 +1,6 @@
+
 package az.crazytime.ai
+
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
@@ -10,8 +12,8 @@ import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,7 +26,6 @@ class MainActivity : Activity() {
         private const val PREFS = "crazy_time_history"
         private const val HISTORY_KEY = "results"
 
-        // CaptureService bu ACTION və EXTRA adları ilə uyğunlaşdırılmalıdır.
         const val ACTION_OCR = "az.crazytime.ai.OCR"
         const val EXTRA_TEXT = "ocr_text"
         const val EXTRA_CANDIDATE = "ocr_candidate"
@@ -78,6 +79,7 @@ class MainActivity : Activity() {
         }
 
         val scroll = ScrollView(this)
+
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -99,9 +101,11 @@ class MainActivity : Activity() {
 
         content.addView(title)
         content.addView(statusText)
+
         content.addView(makeButton("EKRANI OXUMAĞI BAŞLAT") {
             startScreenCapture()
         })
+
         content.addView(makeButton("OXUMAĞI DAYANDIR") {
             stopCapture()
         })
@@ -143,6 +147,7 @@ class MainActivity : Activity() {
                     updateScreen()
                 }
             }
+
             limitButtons.addView(
                 button,
                 LinearLayout.LayoutParams(0, -2, 1f)
@@ -160,11 +165,12 @@ class MainActivity : Activity() {
         })
 
         scroll.addView(content)
+
         root.addView(
             scroll,
             LinearLayout.LayoutParams(
-                LinearLayout.MATCH_PARENT,
-                LinearLayout.MATCH_PARENT
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
 
@@ -195,7 +201,7 @@ class MainActivity : Activity() {
         return View(this).apply {
             setBackgroundColor(0xFF52616B.toInt())
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 1
             ).apply {
                 setMargins(0, 14, 0, 14)
@@ -227,6 +233,7 @@ class MainActivity : Activity() {
 
         if (requestCode == REQUEST_CAPTURE) {
             if (resultCode == RESULT_OK && data != null) {
+
                 val serviceIntent = Intent(this, CaptureService::class.java).apply {
                     putExtra("resultCode", resultCode)
                     putExtra("data", data)
@@ -417,6 +424,7 @@ class MainActivity : Activity() {
         statsText.text = stats.toString()
 
         val history = StringBuilder()
+
         results.take(100).forEachIndexed { index, item ->
             history.append("${index + 1}. $item\n")
         }
