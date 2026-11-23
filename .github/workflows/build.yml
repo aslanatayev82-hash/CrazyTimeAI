@@ -1,4 +1,4 @@
-name: CrazyTimeAI APK Build
+buname: CrazyTimeAI APK Build
 
 on:
   workflow_dispatch:
