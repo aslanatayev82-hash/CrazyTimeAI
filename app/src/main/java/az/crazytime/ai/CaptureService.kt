@@ -21,6 +21,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
@@ -45,6 +46,12 @@ class CaptureService : Service() {
         const val EXTRA_CANDIDATE = "ocr_candidate"
 
         private const val OCR_INTERVAL_MS = 300L
+        private const val MOTION_INTERVAL_MS = 40L
+
+        // Dəqiq kalibrasiyadan sonra bu 3 dəyəri dəyişəcəyik.
+        private const val WHEEL_CENTER_X = 0
+        private const val WHEEL_CENTER_Y = 0
+        private const val WHEEL_RADIUS = 0
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -60,12 +67,20 @@ class CaptureService : Service() {
         )
     }
 
-    private val processing = AtomicBoolean(false)
+    private val ocrProcessing = AtomicBoolean(false)
 
     private var lastOcrTime = 0L
+    private var lastMotionTime = 0L
+
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
+
+    private var wheelFrameAnalyzer: WheelFrameAnalyzer? = null
+    private val wheelMotionAnalyzer = WheelMotionAnalyzer()
+
+    private var cumulativeWheelAngle = 0.0
+    private var lastMotionLogTime = 0L
 
     private val projectionCallback =
         object : MediaProjection.Callback() {
@@ -77,7 +92,6 @@ class CaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
         createNotificationChannel()
         startWorkerThread()
     }
@@ -163,7 +177,7 @@ class CaptureService : Service() {
         return if (Build.VERSION.SDK_INT >= 26) {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Crazy Time AI")
-                .setContentText("Ekran oxunması aktivdir")
+                .setContentText("Ekran analizi aktivdir")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -172,7 +186,7 @@ class CaptureService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("Crazy Time AI")
-                .setContentText("Ekran oxunması aktivdir")
+                .setContentText("Ekran analizi aktivdir")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -198,7 +212,7 @@ class CaptureService : Service() {
 
     private fun startWorkerThread() {
         workerThread = HandlerThread(
-            "CrazyTimeOCR"
+            "CrazyTimeFrameWorker"
         ).also {
             it.start()
             workerHandler = Handler(it.looper)
@@ -233,12 +247,13 @@ class CaptureService : Service() {
         )
 
         getScreenSize()
+        configureWheelAnalyzer()
 
         imageReader = ImageReader.newInstance(
             screenWidth,
             screenHeight,
             PixelFormat.RGBA_8888,
-            2
+            3
         )
 
         imageReader?.setOnImageAvailableListener(
@@ -261,8 +276,32 @@ class CaptureService : Service() {
 
         Log.d(
             TAG,
-            "Ekran oxunması başladı: ${screenWidth}x${screenHeight}"
+            "Ekran başladı: ${screenWidth}x${screenHeight}"
         )
+    }
+
+    private fun configureWheelAnalyzer() {
+        wheelFrameAnalyzer = null
+        wheelMotionAnalyzer.reset()
+        cumulativeWheelAngle = 0.0
+
+        if (WHEEL_CENTER_X > 0 &&
+            WHEEL_CENTER_Y > 0 &&
+            WHEEL_RADIUS > 0
+        ) {
+            wheelFrameAnalyzer = WheelFrameAnalyzer(
+                WHEEL_CENTER_X,
+                WHEEL_CENTER_Y,
+                WHEEL_RADIUS
+            )
+
+            Log.d(TAG, "Təkər analizi aktivdir")
+        } else {
+            Log.d(
+                TAG,
+                "Təkər koordinatları kalibrasiya gözləyir"
+            )
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -291,41 +330,122 @@ class CaptureService : Service() {
         }
     }
 
-    private fun processLatestImage(
-        reader: ImageReader
-    ) {
-        val now = System.currentTimeMillis()
+    private fun processLatestImage(reader: ImageReader) {
+        val image = try {
+            reader.acquireLatestImage()
+        } catch (e: Exception) {
+            Log.e(TAG, "Kadr qəbul xətası", e)
+            null
+        } ?: return
 
-        if (now - lastOcrTime < OCR_INTERVAL_MS) {
-            return
-        }
-
-        if (!processing.compareAndSet(false, true)) {
-            return
-        }
-
-        lastOcrTime = now
-
-        var image: Image? = null
         var bitmap: Bitmap? = null
 
         try {
-            image = reader.acquireLatestImage()
+            val timestampMs =
+                if (image.timestamp > 0L) {
+                    image.timestamp / 1_000_000L
+                } else {
+                    SystemClock.elapsedRealtime()
+                }
 
-            if (image == null) {
-                processing.set(false)
+            val motionDue =
+                timestampMs - lastMotionTime >= MOTION_INTERVAL_MS
+
+            val ocrDue =
+                timestampMs - lastOcrTime >= OCR_INTERVAL_MS
+
+            if (!motionDue && !ocrDue) {
                 return
             }
 
-            // Düzəldilmiş Bitmap hissəsi
-            val capturedBitmap = imageToBitmap(image)
-            bitmap = capturedBitmap
+            if (motionDue) {
+                lastMotionTime = timestampMs
+            }
 
-            image.close()
-            image = null
+            if (ocrDue &&
+                !ocrProcessing.get()
+            ) {
+                // OCR üçün kadr ayırmaq yalnız lazım olduqda edilir.
+                if (ocrProcessing.compareAndSet(false, true)) {
+                    lastOcrTime = timestampMs
+                }
+            }
 
+            val runOcr = ocrDue && ocrProcessing.get()
+
+            bitmap = imageToBitmap(image)
+
+            if (motionDue) {
+                analyzeWheelFrame(
+                    bitmap,
+                    timestampMs
+                )
+            }
+
+            if (runOcr) {
+                val ocrBitmap = bitmap.copy(
+                    Bitmap.Config.ARGB_8888,
+                    false
+                )
+
+                startOcr(ocrBitmap)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Kadr emalı xətası", e)
+        } finally {
+            try {
+                image.close()
+            } catch (_: Exception) {
+            }
+
+            try {
+                bitmap?.recycle()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun analyzeWheelFrame(
+        bitmap: Bitmap,
+        timestampMs: Long
+    ) {
+        val analyzer = wheelFrameAnalyzer ?: return
+
+        val estimate = analyzer.analyze(
+            bitmap,
+            timestampMs
+        )
+
+        if (!estimate.valid) return
+
+        cumulativeWheelAngle += estimate.angleChangeDegrees
+
+        val motion = wheelMotionAnalyzer.addSample(
+            timestampMs,
+            cumulativeWheelAngle
+        )
+
+        if (motion != null) {
+            if (timestampMs - lastMotionLogTime >= 300L) {
+                lastMotionLogTime = timestampMs
+
+                Log.d(
+                    TAG,
+                    "Təkər: bucaq=${motion.angleDegrees}, " +
+                        "sürət=${motion.angularVelocity}, " +
+                        "təcil=${motion.angularAcceleration}, " +
+                        "dayanma=${motion.estimatedStopSeconds}, " +
+                        "inam=${estimate.confidence}"
+                )
+            }
+        }
+    }
+
+    private fun startOcr(bitmap: Bitmap) {
+        try {
             val inputImage = InputImage.fromBitmap(
-                capturedBitmap,
+                bitmap,
                 0
             )
 
@@ -344,31 +464,26 @@ class CaptureService : Service() {
                     }
                 }
                 .addOnFailureListener { error ->
-                    Log.e(
-                        TAG,
-                        "OCR xətası",
-                        error
-                    )
+                    Log.e(TAG, "OCR xətası", error)
                 }
                 .addOnCompleteListener {
                     try {
-                        bitmap?.recycle()
+                        bitmap.recycle()
                     } catch (_: Exception) {
                     }
 
-                    processing.set(false)
+                    ocrProcessing.set(false)
                 }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Şəkil emalı xətası", e)
+            Log.e(TAG, "OCR başladılmadı", e)
 
             try {
-                image?.close()
-                bitmap?.recycle()
+                bitmap.recycle()
             } catch (_: Exception) {
             }
 
-            processing.set(false)
+            ocrProcessing.set(false)
         }
     }
 
@@ -460,10 +575,7 @@ class CaptureService : Service() {
 
         sendBroadcast(intent)
 
-        Log.d(
-            TAG,
-            "OCR nəticəsi göndərildi: $candidate"
-        )
+        Log.d(TAG, "OCR nəticəsi göndərildi: $candidate")
     }
 
     private fun stopCaptureResources() {
@@ -502,6 +614,9 @@ class CaptureService : Service() {
         }
 
         mediaProjection = null
+        wheelFrameAnalyzer?.reset()
+        wheelFrameAnalyzer = null
+        wheelMotionAnalyzer.reset()
     }
 
     override fun onDestroy() {
@@ -522,7 +637,6 @@ class CaptureService : Service() {
         workerHandler = null
 
         stopForeground(true)
-
         super.onDestroy()
     }
 
