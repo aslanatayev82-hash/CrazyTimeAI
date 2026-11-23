@@ -44,7 +44,7 @@ class CaptureService : Service() {
         const val EXTRA_TEXT = "ocr_text"
         const val EXTRA_CANDIDATE = "ocr_candidate"
 
-        private const val OCR_INTERVAL_MS = 900L
+        private const val OCR_INTERVAL_MS = 300L
     }
 
     private var mediaProjection: MediaProjection? = null
