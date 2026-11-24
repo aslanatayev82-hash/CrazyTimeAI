@@ -215,7 +215,9 @@ class WheelAutoDetector {
             val dr = detection.radius - previous.radius
 
             val difference = sqrt(
-                dx * dx + dy * dy + dr * dr
+                dx.toDouble() * dx.toDouble() +
+dy.toDouble() * dy.toDouble() +
+dr.toDouble() * dr.toDouble()
             )
 
             temporalScore =
