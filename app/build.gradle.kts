@@ -35,4 +35,6 @@ dependencies {
 
     // Google ML Kit - mətn tanıma (OCR)
     implementation("com.google.mlkit:text-recognition:16.0.1")
+}    // OpenCV - çarxın avtomatik tanınması
+    implementation("org.opencv:opencv:4.14.0")
 }
