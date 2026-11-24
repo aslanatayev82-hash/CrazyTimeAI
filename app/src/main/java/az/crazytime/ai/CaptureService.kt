@@ -30,11 +30,13 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 class CaptureService : Service() {
 
     companion object {
         private const val TAG = "CrazyTimeAI"
+
         private const val NOTIFICATION_ID = 4101
         private const val CHANNEL_ID = "capture_channel"
 
@@ -47,11 +49,6 @@ class CaptureService : Service() {
 
         private const val OCR_INTERVAL_MS = 300L
         private const val MOTION_INTERVAL_MS = 40L
-
-        // Dəqiq kalibrasiyadan sonra bu 3 dəyəri dəyişəcəyik.
-        private const val WHEEL_CENTER_X = 0
-        private const val WHEEL_CENTER_Y = 0
-        private const val WHEEL_RADIUS = 0
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -76,7 +73,13 @@ class CaptureService : Service() {
     private var screenHeight = 0
     private var screenDensity = 0
 
+    // Avtomatik çarx aşkarlama sistemi
+    private val wheelAutoDetector = WheelAutoDetector()
+
     private var wheelFrameAnalyzer: WheelFrameAnalyzer? = null
+
+    private var activeWheelDetection: WheelDetection? = null
+
     private val wheelMotionAnalyzer = WheelMotionAnalyzer()
 
     private var cumulativeWheelAngle = 0.0
@@ -84,6 +87,7 @@ class CaptureService : Service() {
 
     private val projectionCallback =
         object : MediaProjection.Callback() {
+
             override fun onStop() {
                 Log.d(TAG, "MediaProjection dayandırıldı")
                 stopSelf()
@@ -92,8 +96,11 @@ class CaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
         createNotificationChannel()
         startWorkerThread()
+
+        Log.d(TAG, "CrazyTimeAI xidməti yaradıldı")
     }
 
     override fun onStartCommand(
@@ -131,6 +138,7 @@ class CaptureService : Service() {
         try {
             startForegroundSafely()
             startCapture(resultCode, data)
+
         } catch (e: Exception) {
             Log.e(TAG, "Xidmət başlatma xətası", e)
             stopSelf()
@@ -140,15 +148,19 @@ class CaptureService : Service() {
     }
 
     private fun startForegroundSafely() {
+
         val notification = buildNotification()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
             startForeground(
                 NOTIFICATION_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
+
         } else {
+
             startForeground(
                 NOTIFICATION_ID,
                 notification
@@ -157,6 +169,7 @@ class CaptureService : Service() {
     }
 
     private fun buildNotification(): Notification {
+
         val openAppIntent = Intent(
             this,
             MainActivity::class.java
@@ -175,18 +188,21 @@ class CaptureService : Service() {
         )
 
         return if (Build.VERSION.SDK_INT >= 26) {
+
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Crazy Time AI")
-                .setContentText("Ekran analizi aktivdir")
+                .setContentText("Canlı çarx analizi aktivdir")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .build()
+
         } else {
+
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("Crazy Time AI")
-                .setContentText("Ekran analizi aktivdir")
+                .setContentText("Canlı çarx analizi aktivdir")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -195,7 +211,9 @@ class CaptureService : Service() {
     }
 
     private fun createNotificationChannel() {
+
         if (Build.VERSION.SDK_INT >= 26) {
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Crazy Time ekran oxunması",
@@ -211,10 +229,13 @@ class CaptureService : Service() {
     }
 
     private fun startWorkerThread() {
+
         workerThread = HandlerThread(
             "CrazyTimeFrameWorker"
         ).also {
+
             it.start()
+
             workerHandler = Handler(it.looper)
         }
     }
@@ -223,6 +244,7 @@ class CaptureService : Service() {
         resultCode: Int,
         data: Intent
     ) {
+
         if (mediaProjection != null) {
             stopCaptureResources()
         }
@@ -247,7 +269,11 @@ class CaptureService : Service() {
         )
 
         getScreenSize()
+
         configureWheelAnalyzer()
+
+        lastOcrTime = 0L
+        lastMotionTime = 0L
 
         imageReader = ImageReader.newInstance(
             screenWidth,
@@ -280,43 +306,58 @@ class CaptureService : Service() {
         )
     }
 
+    // ==========================================
+    // AVTOMATIK ÇARX AŞKARLANMASI
+    // ==========================================
+
     private fun configureWheelAnalyzer() {
+
+        wheelAutoDetector.reset()
+
         wheelFrameAnalyzer = null
+        activeWheelDetection = null
+
         wheelMotionAnalyzer.reset()
+
         cumulativeWheelAngle = 0.0
+        lastMotionLogTime = 0L
 
-        if (WHEEL_CENTER_X > 0 &&
-            WHEEL_CENTER_Y > 0 &&
-            WHEEL_RADIUS > 0
-        ) {
-            wheelFrameAnalyzer = WheelFrameAnalyzer(
-                WHEEL_CENTER_X,
-                WHEEL_CENTER_Y,
-                WHEEL_RADIUS
-            )
-
-            Log.d(TAG, "Təkər analizi aktivdir")
-        } else {
-            Log.d(
-                TAG,
-                "Təkər koordinatları kalibrasiya gözləyir"
-            )
-        }
+        Log.d(
+            TAG,
+            "Avtomatik çarx aşkarlanması hazırdır"
+        )
     }
+
+    // ==========================================
+    // EKRAN ÖLÇÜLƏRİ
+    // ==========================================
 
     @Suppress("DEPRECATION")
     private fun getScreenSize() {
+
         val metrics = DisplayMetrics()
 
         if (Build.VERSION.SDK_INT >= 30) {
-            screenWidth = resources.displayMetrics.widthPixels
-            screenHeight = resources.displayMetrics.heightPixels
-            screenDensity = resources.displayMetrics.densityDpi
-        } else {
-            val windowManager =
-                getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-            windowManager.defaultDisplay.getRealMetrics(metrics)
+            screenWidth =
+                resources.displayMetrics.widthPixels
+
+            screenHeight =
+                resources.displayMetrics.heightPixels
+
+            screenDensity =
+                resources.displayMetrics.densityDpi
+
+        } else {
+
+            val windowManager =
+                getSystemService(
+                    Context.WINDOW_SERVICE
+                ) as WindowManager
+
+            windowManager.defaultDisplay.getRealMetrics(
+                metrics
+            )
 
             screenWidth = metrics.widthPixels
             screenHeight = metrics.heightPixels
@@ -324,23 +365,36 @@ class CaptureService : Service() {
         }
 
         if (screenWidth <= 0 || screenHeight <= 0) {
+
             throw IllegalStateException(
                 "Ekran ölçüləri düzgün deyil"
             )
         }
     }
 
-    private fun processLatestImage(reader: ImageReader) {
+    // ==========================================
+    // CANLI KADR EMALI
+    // ==========================================
+
+    private fun processLatestImage(
+        reader: ImageReader
+    ) {
+
         val image = try {
+
             reader.acquireLatestImage()
+
         } catch (e: Exception) {
+
             Log.e(TAG, "Kadr qəbul xətası", e)
             null
         } ?: return
 
         var bitmap: Bitmap? = null
+        var reservedOcr = false
 
         try {
+
             val timestampMs =
                 if (image.timestamp > 0L) {
                     image.timestamp / 1_000_000L
@@ -349,10 +403,12 @@ class CaptureService : Service() {
                 }
 
             val motionDue =
-                timestampMs - lastMotionTime >= MOTION_INTERVAL_MS
+                timestampMs - lastMotionTime >=
+                    MOTION_INTERVAL_MS
 
             val ocrDue =
-                timestampMs - lastOcrTime >= OCR_INTERVAL_MS
+                timestampMs - lastOcrTime >=
+                    OCR_INTERVAL_MS
 
             if (!motionDue && !ocrDue) {
                 return
@@ -363,37 +419,44 @@ class CaptureService : Service() {
             }
 
             if (ocrDue &&
-                !ocrProcessing.get()
+                ocrProcessing.compareAndSet(false, true)
             ) {
-                // OCR üçün kadr ayırmaq yalnız lazım olduqda edilir.
-                if (ocrProcessing.compareAndSet(false, true)) {
-                    lastOcrTime = timestampMs
-                }
-            }
 
-            val runOcr = ocrDue && ocrProcessing.get()
+                lastOcrTime = timestampMs
+                reservedOcr = true
+            }
 
             bitmap = imageToBitmap(image)
 
             if (motionDue) {
+
                 analyzeWheelFrame(
                     bitmap,
                     timestampMs
                 )
             }
 
-            if (runOcr) {
+            if (reservedOcr) {
+
                 val ocrBitmap = bitmap.copy(
                     Bitmap.Config.ARGB_8888,
                     false
                 )
 
                 startOcr(ocrBitmap)
+                reservedOcr = false
             }
 
         } catch (e: Exception) {
+
             Log.e(TAG, "Kadr emalı xətası", e)
+
         } finally {
+
+            if (reservedOcr) {
+                ocrProcessing.set(false)
+            }
+
             try {
                 image.close()
             } catch (_: Exception) {
@@ -406,54 +469,115 @@ class CaptureService : Service() {
         }
     }
 
+    // ==========================================
+    // ÇARXIN AVTOMATİK TAPILMASI VƏ HƏRƏKƏTİ
+    // ==========================================
+
     private fun analyzeWheelFrame(
         bitmap: Bitmap,
         timestampMs: Long
     ) {
-        val analyzer = wheelFrameAnalyzer ?: return
+
+        // Birinci mərhələ: çarxı avtomatik tap.
+
+        if (activeWheelDetection == null) {
+
+            val detection =
+                wheelAutoDetector.detect(bitmap)
+                    ?: return
+
+            if (detection.confidence < 0.35) {
+                return
+            }
+
+            activeWheelDetection = detection
+
+            wheelFrameAnalyzer = WheelFrameAnalyzer(
+                detection.centerX,
+                detection.centerY,
+                detection.radius
+            )
+
+            cumulativeWheelAngle = 0.0
+
+            wheelMotionAnalyzer.reset()
+
+            Log.d(
+                TAG,
+                "ÇARX AŞKARLANDI: " +
+                    "X=${detection.centerX}, " +
+                    "Y=${detection.centerY}, " +
+                    "R=${detection.radius}, " +
+                    "inam=${detection.confidence}"
+            )
+
+            return
+        }
+
+        // İkinci mərhələ: hərəkəti kadr-kadr ölç.
+
+        val analyzer =
+            wheelFrameAnalyzer ?: return
 
         val estimate = analyzer.analyze(
             bitmap,
             timestampMs
         )
 
-        if (!estimate.valid) return
+        if (!estimate.valid) {
+            return
+        }
 
-        cumulativeWheelAngle += estimate.angleChangeDegrees
+        cumulativeWheelAngle +=
+            estimate.angleChangeDegrees
+
+        // Üçüncü mərhələ: sürət və təcil hesabla.
 
         val motion = wheelMotionAnalyzer.addSample(
             timestampMs,
             cumulativeWheelAngle
-        )
+        ) ?: return
 
-        if (motion != null) {
-            if (timestampMs - lastMotionLogTime >= 300L) {
-                lastMotionLogTime = timestampMs
+        // Log məlumatlarını 300 ms intervalda yaz.
 
-                Log.d(
-                    TAG,
-                    "Təkər: bucaq=${motion.angleDegrees}, " +
-                        "sürət=${motion.angularVelocity}, " +
-                        "təcil=${motion.angularAcceleration}, " +
-                        "dayanma=${motion.estimatedStopSeconds}, " +
-                        "inam=${estimate.confidence}"
-                )
-            }
+        if (timestampMs - lastMotionLogTime >= 300L) {
+
+            lastMotionLogTime = timestampMs
+
+            Log.d(
+                TAG,
+                "ÇARX ANALİZİ | " +
+                    "Bucaq=${motion.angleDegrees} | " +
+                    "Sürət=${motion.angularVelocity} | " +
+                    "Təcil=${motion.angularAcceleration} | " +
+                    "Dayanma=${motion.estimatedStopSeconds} | " +
+                    "İnam=${estimate.confidence} | " +
+                    "Kadr=${motion.sampleCount}"
+            )
         }
     }
 
+    // ==========================================
+    // OCR - MƏTNİN TANINMASI
+    // ==========================================
+
     private fun startOcr(bitmap: Bitmap) {
+
         try {
+
             val inputImage = InputImage.fromBitmap(
                 bitmap,
                 0
             )
 
             recognizer.process(inputImage)
+
                 .addOnSuccessListener { result ->
+
                     val recognizedText = result.text
 
                     if (recognizedText.isNotBlank()) {
+
                         val candidate =
                             findCandidate(recognizedText)
 
@@ -463,10 +587,18 @@ class CaptureService : Service() {
                         )
                     }
                 }
+
                 .addOnFailureListener { error ->
-                    Log.e(TAG, "OCR xətası", error)
+
+                    Log.e(
+                        TAG,
+                        "OCR xətası",
+                        error
+                    )
                 }
+
                 .addOnCompleteListener {
+
                     try {
                         bitmap.recycle()
                     } catch (_: Exception) {
@@ -476,7 +608,12 @@ class CaptureService : Service() {
                 }
 
         } catch (e: Exception) {
-            Log.e(TAG, "OCR başladılmadı", e)
+
+            Log.e(
+                TAG,
+                "OCR başladılmadı",
+                e
+            )
 
             try {
                 bitmap.recycle()
@@ -487,7 +624,14 @@ class CaptureService : Service() {
         }
     }
 
-    private fun imageToBitmap(image: Image): Bitmap {
+    // ==========================================
+    // IMAGE TO BITMAP
+    // ==========================================
+
+    private fun imageToBitmap(
+        image: Image
+    ): Bitmap {
+
         val plane = image.planes[0]
         val buffer = plane.buffer
 
@@ -507,6 +651,7 @@ class CaptureService : Service() {
         )
 
         buffer.rewind()
+
         paddedBitmap.copyPixelsFromBuffer(buffer)
 
         val croppedBitmap = Bitmap.createBitmap(
@@ -524,7 +669,14 @@ class CaptureService : Service() {
         return croppedBitmap
     }
 
-    private fun findCandidate(text: String): String {
+    // ==========================================
+    // CRAZY TIME NƏTİCƏ TANINMASI
+    // ==========================================
+
+    private fun findCandidate(
+        text: String
+    ): String {
+
         val normalized = text
             .lowercase(Locale.ROOT)
             .replace("\n", " ")
@@ -538,12 +690,19 @@ class CaptureService : Service() {
         )
 
         for (bonus in bonusWords) {
+
             if (normalized.contains(bonus)) {
+
                 return when (bonus) {
+
                     "crazy time" -> "Crazy Time"
+
                     "cash hunt" -> "Cash Hunt"
+
                     "pachinko" -> "Pachinko"
+
                     "coin flip" -> "Coin Flip"
+
                     else -> ""
                 }
             }
@@ -551,7 +710,8 @@ class CaptureService : Service() {
 
         val numberMatches = Regex(
             "(?<![a-z0-9])(?:10|5|2|1)(?![a-z0-9])"
-        ).findAll(normalized)
+        )
+            .findAll(normalized)
             .map { it.value }
             .distinct()
             .toList()
@@ -563,22 +723,41 @@ class CaptureService : Service() {
         }
     }
 
+    // ==========================================
+    // OCR NƏTİCƏSİNİ GÖNDƏR
+    // ==========================================
+
     private fun sendOcrResult(
         text: String,
         candidate: String
     ) {
+
         val intent = Intent(ACTION_OCR).apply {
+
             setPackage(packageName)
+
             putExtra(EXTRA_TEXT, text)
-            putExtra(EXTRA_CANDIDATE, candidate)
+
+            putExtra(
+                EXTRA_CANDIDATE,
+                candidate
+            )
         }
 
         sendBroadcast(intent)
 
-        Log.d(TAG, "OCR nəticəsi göndərildi: $candidate")
+        Log.d(
+            TAG,
+            "OCR nəticəsi göndərildi: $candidate"
+        )
     }
 
+    // ==========================================
+    // RESURSLARI DAYANDIR
+    // ==========================================
+
     private fun stopCaptureResources() {
+
         try {
             imageReader?.setOnImageAvailableListener(
                 null,
@@ -614,12 +793,32 @@ class CaptureService : Service() {
         }
 
         mediaProjection = null
+
+        wheelAutoDetector.reset()
+
         wheelFrameAnalyzer?.reset()
         wheelFrameAnalyzer = null
+
+        activeWheelDetection = null
+
         wheelMotionAnalyzer.reset()
+
+        cumulativeWheelAngle = 0.0
+
+        ocrProcessing.set(false)
+
+        Log.d(
+            TAG,
+            "Bütün analiz resursları dayandırıldı"
+        )
     }
 
+    // ==========================================
+    // XİDMƏT BAĞLANMASI
+    // ==========================================
+
     override fun onDestroy() {
+
         stopCaptureResources()
 
         try {
@@ -628,8 +827,11 @@ class CaptureService : Service() {
         }
 
         try {
+
             workerThread?.quitSafely()
+
             workerThread?.join(500)
+
         } catch (_: Exception) {
         }
 
@@ -637,10 +839,18 @@ class CaptureService : Service() {
         workerHandler = null
 
         stopForeground(true)
+
+        Log.d(
+            TAG,
+            "CrazyTimeAI xidməti bağlandı"
+        )
+
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
+    override fun onBind(
+        intent: Intent?
+    ): IBinder? {
         return null
     }
 }
